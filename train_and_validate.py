@@ -1,6 +1,7 @@
 import argparse
 import copy
 import os
+import platform
 import random
 from dataclasses import dataclass
 from typing import Callable, Dict, Tuple
@@ -105,7 +106,7 @@ class DatasetSpec:
     in_channels: int
 
 
-def get_dataloaders(dataset_name: str, data_root: str, batch_size: int, num_workers: int):
+def get_dataloaders(dataset_name: str, data_root: str, batch_size: int, num_workers: int, pin_memory: bool):
     if dataset_name.lower() == "mnist":
         transform = transforms.Compose([
             transforms.Resize((32, 32)),
@@ -126,8 +127,22 @@ def get_dataloaders(dataset_name: str, data_root: str, batch_size: int, num_work
     else:
         raise ValueError("dataset_name must be one of: mnist, cifar10")
 
-    train_loader = DataLoader(train_set, batch_size=batch_size, shuffle=True, num_workers=num_workers, pin_memory=True)
-    test_loader = DataLoader(test_set, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=True)
+    train_loader = DataLoader(
+        train_set,
+        batch_size=batch_size,
+        shuffle=True,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        persistent_workers=num_workers > 0,
+    )
+    test_loader = DataLoader(
+        test_set,
+        batch_size=batch_size,
+        shuffle=False,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        persistent_workers=num_workers > 0,
+    )
     return spec, train_loader, test_loader
 
 
@@ -139,7 +154,7 @@ def train_one_epoch(model, loader, criterion, optimizer, device, max_batches=Non
     for batch_idx, (x, y) in enumerate(loader):
         if max_batches is not None and batch_idx >= max_batches:
             break
-        x, y = x.to(device), y.to(device)
+        x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
         optimizer.zero_grad(set_to_none=True)
         logits = model(x)
         loss = criterion(logits, y)
@@ -162,7 +177,7 @@ def evaluate(model, loader, device, max_batches=None):
     for batch_idx, (x, y) in enumerate(loader):
         if max_batches is not None and batch_idx >= max_batches:
             break
-        x, y = x.to(device), y.to(device)
+        x, y = x.to(device, non_blocking=True), y.to(device, non_blocking=True)
         logits = model(x)
         pred = logits.argmax(dim=1)
         total += y.size(0)
@@ -206,7 +221,7 @@ def replace_quant_relu_with_lut(module: nn.Module, lut_x: np.ndarray, lut_y: np.
 
 def run_for_dataset(args, dataset_name: str, lut_x: np.ndarray, lut_y: np.ndarray, device: torch.device) -> Dict[str, float]:
     spec, train_loader, test_loader = get_dataloaders(
-        dataset_name, args.data_root, args.batch_size, args.num_workers
+        dataset_name, args.data_root, args.batch_size, args.num_workers, pin_memory=(device.type == "cuda")
     )
 
     model = VGG11Small(spec.num_classes, spec.in_channels, activation_factory=QuantizedReLU).to(device)
@@ -228,7 +243,8 @@ def run_for_dataset(args, dataset_name: str, lut_x: np.ndarray, lut_y: np.ndarra
 
     acc_standard = evaluate(model, test_loader, device, max_batches=args.max_test_batches)
 
-    lut_model = copy.deepcopy(model)
+    lut_model = VGG11Small(spec.num_classes, spec.in_channels, activation_factory=QuantizedReLU)
+    lut_model.load_state_dict(copy.deepcopy(model.state_dict()))
     replace_quant_relu_with_lut(lut_model, lut_x, lut_y)
     lut_model.to(device)
     acc_lut = evaluate(lut_model, test_loader, device, max_batches=args.max_test_batches)
@@ -248,7 +264,7 @@ def parse_args():
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--lr", type=float, default=1e-3)
-    parser.add_argument("--num-workers", type=int, default=4)
+    parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max-train-batches", type=int, default=None, help="Optional debug cap per epoch")
     parser.add_argument("--max-test-batches", type=int, default=None, help="Optional debug cap for eval")
@@ -257,9 +273,21 @@ def parse_args():
 
 def main():
     args = parse_args()
+
+    # Windows + CUDA + 多进程 DataLoader 在部分 PyTorch 2.2.x 环境中容易触发原生层崩溃
+    # （表现为 0xC0000005 access violation）。默认强制单进程读取更稳。
+    if platform.system().lower() == "windows" and args.num_workers > 0:
+        print("[WARN] Windows detected: forcing num_workers=0 for stability.")
+        args.num_workers = 0
+
     set_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     print(f"Using device: {device}")
+
+    if device.type == "cuda":
+        # 关闭 benchmark 可避免部分机器上 cudnn 自动算法选择触发不稳定问题
+        torch.backends.cudnn.benchmark = False
+        torch.backends.cudnn.deterministic = True
 
     lut_csv_path = os.path.join(args.output_dir, "relu_lut_8bit.csv")
     lut_x, lut_y = build_interpolated_lut(args.lut_file, lut_csv_path)

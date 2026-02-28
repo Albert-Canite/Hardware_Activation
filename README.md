@@ -29,6 +29,8 @@
 python train_and_validate.py --epochs 10 --batch-size 128
 ```
 
+> 说明：直接在 IDE 里点 run 也可以，不需要命令行参数。脚本默认 `num_workers=0`，是为了避免 Windows + CUDA 下某些环境出现 `0xC0000005` 原生崩溃。
+
 > 如果你想先快速验证流程是否通畅，可用：
 
 ```bash
