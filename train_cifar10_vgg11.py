@@ -1,17 +1,19 @@
 import argparse
 import os
+import subprocess
+import sys
 from pathlib import Path
 
 from env_check import ensure_runtime_compatibility
 
 PROJECT_DIR = Path(__file__).resolve().parent
+WINDOWS_ACCESS_VIOLATION = -1073741819
 
 
-def train(args):
+def _train_worker(args):
     ensure_runtime_compatibility()
 
     if args.device == "cpu":
-        # Hard-disable CUDA path before importing torch to avoid native CUDA init crashes on Windows.
         os.environ.setdefault("CUDA_VISIBLE_DEVICES", "-1")
 
     import torch
@@ -53,13 +55,25 @@ def train(args):
         print(f"[CIFAR10] Epoch {epoch}/{args.epochs} | loss={train_loss:.4f} | val_acc={val_acc * 100:.2f}%")
 
     os.makedirs(os.path.dirname(args.save_path), exist_ok=True)
-    import torch as _torch
-
-    _torch.save({"state_dict": model.state_dict()}, args.save_path)
+    torch.save({"state_dict": model.state_dict()}, args.save_path)
     print(f"Saved CIFAR-10 VGG11 quantized-ReLU model to: {args.save_path}")
 
 
-if __name__ == "__main__":
+def _run_with_crash_guard():
+    cmd = [sys.executable, str(Path(__file__).resolve()), *sys.argv[1:], "--_worker"]
+    ret = subprocess.run(cmd).returncode
+    if ret == WINDOWS_ACCESS_VIOLATION:
+        print("\n[CRASH GUARD] Worker exited with 0xC0000005 (Access Violation).")
+        print("[CRASH GUARD] This usually means native runtime conflict (PyTorch/CUDA/MKL DLL), not Python logic.")
+        print("[CRASH GUARD] Please try in your PyONN env:")
+        print("  1) conda install -y cpuonly pytorch torchvision pytorch-cuda=none -c pytorch")
+        print("  2) or reinstall a matching CUDA stack for torch 2.2.2 + cu121")
+        print("  3) set IDE Run configuration env: CUDA_VISIBLE_DEVICES=-1")
+        return 1
+    return ret
+
+
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Train VGG11 on CIFAR-10 with 8-bit QuantReLU")
     parser.add_argument("--data-root", type=str, default=str(PROJECT_DIR / "data"))
     parser.add_argument("--save-path", type=str, default=str(PROJECT_DIR / "checkpoints" / "cifar10_vgg11_quantrelu8.pth"))
@@ -68,5 +82,14 @@ if __name__ == "__main__":
     parser.add_argument("--lr", type=float, default=0.05)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--device", type=str, default="cpu", choices=["cpu", "cuda"])
+    parser.add_argument("--_worker", action="store_true", help=argparse.SUPPRESS)
+    return parser
+
+
+if __name__ == "__main__":
+    parser = _build_parser()
     args = parser.parse_args()
-    train(args)
+    if args._worker:
+        _train_worker(args)
+    else:
+        raise SystemExit(_run_with_crash_guard())

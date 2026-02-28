@@ -86,3 +86,9 @@ pip install "numpy<2"
 
 
 补充：脚本在 `--device cpu` 下会在导入 torch 前设置 `CUDA_VISIBLE_DEVICES=-1`，尽量避免 Windows 下 CUDA 相关 native 崩溃。
+
+
+## 启动器防崩溃机制
+
+现在四个主脚本使用“启动器 + worker 子进程”模式。
+如果 worker 发生 Windows `0xC0000005`，启动器会捕获返回码并打印 `[CRASH GUARD]` 诊断信息，而不是直接无提示退出。

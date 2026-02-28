@@ -1,17 +1,19 @@
 import argparse
 import os
+import subprocess
+import sys
 from pathlib import Path
 
 from env_check import ensure_runtime_compatibility
 
 PROJECT_DIR = Path(__file__).resolve().parent
+WINDOWS_ACCESS_VIOLATION = -1073741819
 
 
-def run(args):
+def _run_worker(args):
     ensure_runtime_compatibility()
 
     if args.device == "cpu":
-        # Hard-disable CUDA path before importing torch to avoid native CUDA init crashes on Windows.
         os.environ.setdefault("CUDA_VISIBLE_DEVICES", "-1")
 
     import torch
@@ -28,8 +30,8 @@ def run(args):
     if use_cuda and not torch.cuda.is_available():
         raise RuntimeError("--device cuda was requested, but CUDA is not available or CUDA runtime is broken.")
     device = torch.device("cuda" if use_cuda else "cpu")
-    _, test_loader = get_mnist_loaders(batch_size=args.batch_size, data_root=args.data_root)
 
+    _, test_loader = get_mnist_loaders(batch_size=args.batch_size, data_root=args.data_root)
     ckpt = torch.load(args.model_path, map_location="cpu")
 
     model_standard = build_vgg11_quantrelu(num_classes=10)
@@ -54,7 +56,17 @@ def run(args):
     print(f"  Interpolated 8-bit LUT saved to : {args.interp_lut_csv}")
 
 
-if __name__ == "__main__":
+def _run_with_crash_guard():
+    cmd = [sys.executable, str(Path(__file__).resolve()), *sys.argv[1:], "--_worker"]
+    ret = subprocess.run(cmd).returncode
+    if ret == WINDOWS_ACCESS_VIOLATION:
+        print("\n[CRASH GUARD] Worker exited with 0xC0000005 (Access Violation).")
+        print("[CRASH GUARD] This usually means native runtime conflict (PyTorch/CUDA/MKL DLL), not Python logic.")
+        return 1
+    return ret
+
+
+def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="MNIST inference: standard vs LUT-ReLU")
     parser.add_argument("--data-root", type=str, default=str(PROJECT_DIR / "data"))
     parser.add_argument("--model-path", type=str, default=str(PROJECT_DIR / "checkpoints" / "mnist_vgg11_quantrelu8.pth"))
@@ -62,5 +74,14 @@ if __name__ == "__main__":
     parser.add_argument("--interp-lut-csv", type=str, default=str(PROJECT_DIR / "checkpoints" / "lut_relu_8bit_mnist.csv"))
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--device", type=str, default="cpu", choices=["cpu", "cuda"])
+    parser.add_argument("--_worker", action="store_true", help=argparse.SUPPRESS)
+    return parser
+
+
+if __name__ == "__main__":
+    parser = _build_parser()
     args = parser.parse_args()
-    run(args)
+    if args._worker:
+        _run_worker(args)
+    else:
+        raise SystemExit(_run_with_crash_guard())
