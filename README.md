@@ -21,7 +21,7 @@
 - PyTorch 2.2.2
 - CUDA 12.1
 
-额外依赖：`torchvision`, `pandas`, `openpyxl`, `numpy`
+额外依赖：`torchvision`, `openpyxl`, `numpy`
 
 ## 运行方式（直接一条命令）
 

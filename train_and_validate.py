@@ -1,5 +1,6 @@
 import argparse
 import copy
+import faulthandler
 import os
 import platform
 import random
@@ -16,11 +17,9 @@ from torch.utils.data import DataLoader
 from torchvision import datasets, transforms
 
 try:
-    import pandas as pd
+    from openpyxl import load_workbook
 except ImportError as exc:
-    raise ImportError(
-        "pandas is required to read LUT_ReLU.xlsx. Please install pandas and openpyxl."
-    ) from exc
+    raise ImportError("openpyxl is required to read LUT_ReLU.xlsx.") from exc
 
 
 QMIN, QMAX, QLEVELS = -1.0, 1.0, 256
@@ -239,15 +238,29 @@ def evaluate(model, loader, device, max_batches=None):
 
 
 def build_interpolated_lut(lut_xlsx: str, output_csv: str) -> Tuple[np.ndarray, np.ndarray]:
-    table = pd.read_excel(lut_xlsx, header=None)
-    if table.shape[1] < 2:
-        raise ValueError("LUT_ReLU.xlsx must contain at least two columns: input and output")
+    # Use openpyxl directly to avoid pandas engine/native-stack instability on some Windows setups.
+    wb = load_workbook(lut_xlsx, read_only=True, data_only=True)
+    ws = wb.active
+    x_vals = []
+    y_vals = []
+    for row in ws.iter_rows(min_row=1, max_col=2, values_only=True):
+        if row is None:
+            continue
+        a = row[0] if len(row) > 0 else None
+        b = row[1] if len(row) > 1 else None
+        try:
+            xa = float(a)
+            yb = float(b)
+            if np.isfinite(xa) and np.isfinite(yb):
+                x_vals.append(xa)
+                y_vals.append(yb)
+        except (TypeError, ValueError):
+            continue
+    wb.close()
 
-    x_src = pd.to_numeric(table.iloc[:, 0], errors="coerce").to_numpy(dtype=np.float32)
-    y_src = pd.to_numeric(table.iloc[:, 1], errors="coerce").to_numpy(dtype=np.float32)
+    x_src = np.asarray(x_vals, dtype=np.float32)
+    y_src = np.asarray(y_vals, dtype=np.float32)
 
-    valid = np.isfinite(x_src) & np.isfinite(y_src)
-    x_src, y_src = x_src[valid], y_src[valid]
     if x_src.size < 2:
         raise ValueError("LUT_ReLU.xlsx does not contain enough numeric (input, output) pairs")
 
@@ -337,6 +350,7 @@ def parse_args():
 
 
 def main():
+    faulthandler.enable(all_threads=True)
     args = parse_args()
 
     # Windows + CUDA + 多进程 DataLoader 在部分 PyTorch 2.2.x 环境中容易触发原生层崩溃
