@@ -6,9 +6,19 @@ from dataclasses import dataclass
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.ao.quantization import convert, get_default_qat_qconfig, prepare_qat
+from torch.ao.quantization import QConfig, convert, prepare_qat
+from torch.ao.quantization.fake_quantize import FakeQuantize
+from torch.ao.quantization.observer import (
+    MovingAverageMinMaxObserver,
+    MovingAveragePerChannelMinMaxObserver,
+)
 from torch.utils.data import DataLoader
 from torchvision import datasets, models, transforms
+
+
+def scale_to_signed_unit(x: torch.Tensor) -> torch.Tensor:
+    """Scale [0, 1] tensor values to [-1, 1]. Top-level function keeps DataLoader picklable on Windows."""
+    return x * 2.0 - 1.0
 
 
 class Uniform8BitQuantizer(nn.Module):
@@ -147,7 +157,7 @@ def main():
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--seed", type=int, default=42)
-    parser.add_argument("--num-workers", type=int, default=2)
+    parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--limit-train-batches", type=int, default=None)
     parser.add_argument("--limit-val-batches", type=int, default=None)
     args = parser.parse_args()
@@ -157,7 +167,7 @@ def main():
 
     transform = transforms.Compose([
         transforms.ToTensor(),
-        transforms.Lambda(lambda x: x * 2.0 - 1.0),  # map input to [-1, 1]
+        transforms.Lambda(scale_to_signed_unit),  # map input to [-1, 1]
     ])
 
     train_set = datasets.MNIST(root=args.data_dir, train=True, download=True, transform=transform)
@@ -180,8 +190,24 @@ def main():
 
     model = QuantizableVGG11MNIST().to(device)
 
-    # QAT setup: fake-quantized training for 8-bit weights/activations.
-    model.qconfig = get_default_qat_qconfig("fbgemm")
+    # QAT setup: explicit 8-bit ranges via quant_min/quant_max to avoid reduce_range warnings.
+    model.qconfig = QConfig(
+        activation=FakeQuantize.with_args(
+            observer=MovingAverageMinMaxObserver,
+            quant_min=0,
+            quant_max=255,
+            dtype=torch.quint8,
+            qscheme=torch.per_tensor_affine,
+        ),
+        weight=FakeQuantize.with_args(
+            observer=MovingAveragePerChannelMinMaxObserver,
+            quant_min=-128,
+            quant_max=127,
+            dtype=torch.qint8,
+            qscheme=torch.per_channel_symmetric,
+            ch_axis=0,
+        ),
+    )
     prepare_qat(model, inplace=True)
 
     criterion = nn.CrossEntropyLoss()

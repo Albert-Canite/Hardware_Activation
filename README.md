@@ -18,7 +18,7 @@
 ## 运行方式
 
 ```bash
-python train_vgg11_mnist_qat.py
+python train_vgg11_mnist_qat.py --num-workers 0
 ```
 
 可选快速验证（少量 batch）：
@@ -26,3 +26,5 @@ python train_vgg11_mnist_qat.py
 ```bash
 python train_vgg11_mnist_qat.py --epochs 1 --limit-train-batches 5 --limit-val-batches 2
 ```
+
+> 说明：默认 `--num-workers 0` 以避免 Windows 下 DataLoader 多进程对局部 lambda 的 pickling 报错。
