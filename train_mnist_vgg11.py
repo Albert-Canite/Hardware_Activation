@@ -10,6 +10,10 @@ PROJECT_DIR = Path(__file__).resolve().parent
 def train(args):
     ensure_runtime_compatibility()
 
+    if args.device == "cpu":
+        # Hard-disable CUDA path before importing torch to avoid native CUDA init crashes on Windows.
+        os.environ.setdefault("CUDA_VISIBLE_DEVICES", "-1")
+
     import torch
     import torch.nn as nn
     import torch.optim as optim

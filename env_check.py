@@ -11,6 +11,8 @@ def ensure_runtime_compatibility() -> None:
     # Keep thread usage conservative on Windows to reduce native runtime instability.
     os.environ.setdefault("OMP_NUM_THREADS", "1")
     os.environ.setdefault("MKL_NUM_THREADS", "1")
+    os.environ.setdefault("KMP_DUPLICATE_LIB_OK", "TRUE")
+    os.environ.setdefault("MKL_SERVICE_FORCE_INTEL", "1")
 
     try:
         import numpy as np

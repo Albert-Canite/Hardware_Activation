@@ -83,3 +83,6 @@ pip install "numpy<2"
 
 
 如果你要强制 GPU，可用：`python train_mnist_vgg11.py --device cuda`。
+
+
+补充：脚本在 `--device cpu` 下会在导入 torch 前设置 `CUDA_VISIBLE_DEVICES=-1`，尽量避免 Windows 下 CUDA 相关 native 崩溃。
