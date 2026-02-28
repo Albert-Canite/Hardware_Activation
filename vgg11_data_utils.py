@@ -9,11 +9,12 @@ from torchvision import datasets, models, transforms
 from relu_quant_lut import replace_relu_with_quantrelu
 
 
-def set_seed(seed: int = 42) -> None:
+def set_seed(seed: int = 42, use_cuda: bool = False) -> None:
     random.seed(seed)
     np.random.seed(seed)
     torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
+    if use_cuda and torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 
 def build_vgg11_quantrelu(num_classes: int = 10) -> nn.Module:

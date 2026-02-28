@@ -33,11 +33,13 @@
 ```bash
 python train_mnist_vgg11.py
 ```
+> 默认使用 CPU 运行（更稳定，避免 CUDA 相关崩溃）。如需 GPU，请加 `--device cuda`。
 
 ### 2) MNIST 推理对比（得到 2 个准确度）
 ```bash
 python infer_compare_mnist.py
 ```
+> 如需 GPU 推理可加 `--device cuda`。
 
 ### 3) CIFAR-10 训练并保存
 ```bash
@@ -79,3 +81,5 @@ pip install "numpy<2"
 
 本项目脚本现在会在最开始做环境检查：如果检测到 `numpy>=2.0` 会直接给出明确提示并退出，避免无提示崩溃。
 
+
+如果你要强制 GPU，可用：`python train_mnist_vgg11.py --device cuda`。

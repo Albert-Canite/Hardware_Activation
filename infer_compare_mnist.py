@@ -20,7 +20,10 @@ def run(args):
     )
     from vgg11_data_utils import build_vgg11_quantrelu, evaluate, get_mnist_loaders
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    use_cuda = args.device == "cuda"
+    if use_cuda and not torch.cuda.is_available():
+        raise RuntimeError("--device cuda was requested, but CUDA is not available or CUDA runtime is broken.")
+    device = torch.device("cuda" if use_cuda else "cpu")
     _, test_loader = get_mnist_loaders(batch_size=args.batch_size, data_root=args.data_root)
 
     ckpt = torch.load(args.model_path, map_location="cpu")
@@ -54,5 +57,6 @@ if __name__ == "__main__":
     parser.add_argument("--lut-xlsx", type=str, default=str(PROJECT_DIR / "LUT_ReLU.xlsx"))
     parser.add_argument("--interp-lut-csv", type=str, default=str(PROJECT_DIR / "checkpoints" / "lut_relu_8bit_mnist.csv"))
     parser.add_argument("--batch-size", type=int, default=128)
+    parser.add_argument("--device", type=str, default="cpu", choices=["cpu", "cuda"])
     args = parser.parse_args()
     run(args)

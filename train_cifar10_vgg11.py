@@ -16,8 +16,11 @@ def train(args):
 
     from vgg11_data_utils import build_vgg11_quantrelu, evaluate, get_cifar10_loaders, set_seed
 
-    set_seed(args.seed)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    use_cuda = args.device == "cuda"
+    if use_cuda and not torch.cuda.is_available():
+        raise RuntimeError("--device cuda was requested, but CUDA is not available or CUDA runtime is broken.")
+    device = torch.device("cuda" if use_cuda else "cpu")
+    set_seed(args.seed, use_cuda=use_cuda)
 
     train_loader, test_loader = get_cifar10_loaders(batch_size=args.batch_size, data_root=args.data_root)
     model = build_vgg11_quantrelu(num_classes=10).to(device)
@@ -60,5 +63,6 @@ if __name__ == "__main__":
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--lr", type=float, default=0.05)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--device", type=str, default="cpu", choices=["cpu", "cuda"])
     args = parser.parse_args()
     train(args)
