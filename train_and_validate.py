@@ -346,12 +346,33 @@ def parse_args():
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max-train-batches", type=int, default=None, help="Optional debug cap per epoch")
     parser.add_argument("--max-test-batches", type=int, default=None, help="Optional debug cap for eval")
+    parser.add_argument("--_worker", action="store_true", help=argparse.SUPPRESS)
     return parser.parse_args()
 
+
+
+
+def launch_worker_process() -> int:
+    """Run the heavy training flow in a subprocess to avoid hard IDE crash on native CUDA faults."""
+    cmd = [sys.executable, os.path.abspath(__file__), "--_worker"] + sys.argv[1:]
+    proc = subprocess.Popen(cmd)
+    proc.wait()
+    code = proc.returncode
+    # Windows access violation
+    if code == 3221225477 or code == -1073741819:
+        print("\n[ERROR] Worker crashed with 0xC0000005 (native access violation).")
+        print("[ERROR] This indicates a low-level CUDA/driver/runtime crash, not Python logic.")
+        print("[ERROR] Crash is likely outside model code (driver/cuDNN/OS interaction).")
+        return 1
+    return 0 if code == 0 else code
 
 def main():
     faulthandler.enable(all_threads=True)
     args = parse_args()
+
+    if not args._worker:
+        rc = launch_worker_process()
+        raise SystemExit(rc)
 
     # Windows + CUDA + 多进程 DataLoader 在部分 PyTorch 2.2.x 环境中容易触发原生层崩溃
     # （表现为 0xC0000005 access violation）。默认强制单进程读取更稳。
