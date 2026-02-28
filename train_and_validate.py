@@ -348,11 +348,14 @@ def main():
         # Windows 环境默认关闭 pin_memory，避免部分驱动/环境在 page-locked 内存路径崩溃
         args.disable_pin_memory = True
 
+    print("[STAGE] set_seed")
     set_seed(args.seed)
+    print("[STAGE] select_device")
     device = select_device(args.device, require_gpu=args.require_gpu)
     print(f"Using device: {device}")
 
     if device.type == "cuda":
+        print("[STAGE] configure_cuda_flags")
         # 关闭 benchmark 可避免部分机器上 cudnn 自动算法选择触发不稳定问题
         torch.backends.cudnn.benchmark = False
         torch.backends.cudnn.deterministic = True
@@ -361,12 +364,10 @@ def main():
             torch.backends.cudnn.enabled = False
             torch.backends.cuda.matmul.allow_tf32 = False
             print("[INFO] GPU safe mode enabled: cudnn disabled, tf32 disabled.")
-        # 进一步降低原生崩溃概率：限制每进程显存占比，避免 OOM 触发驱动异常
-        try:
-            torch.cuda.set_per_process_memory_fraction(0.9)
-        except Exception:
-            pass
+        # 注意：不再调用 torch.cuda.set_per_process_memory_fraction。
+        # 该调用在部分 Windows + 驱动组合中会直接触发 native 崩溃（无 Python 异常）。
 
+    print("[STAGE] build_lut")
     lut_csv_path = os.path.join(args.output_dir, "relu_lut_8bit.csv")
     lut_x, lut_y = build_interpolated_lut(args.lut_file, lut_csv_path)
     print(f"Saved interpolated 8-bit LUT: {lut_csv_path}")

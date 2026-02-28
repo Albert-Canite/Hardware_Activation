@@ -47,6 +47,8 @@ python train_and_validate.py --device cuda --require-gpu
 
 并保持默认安全模式（`--gpu-safe-mode`，默认开启），该模式会禁用 `cudnn` 高风险路径但仍然使用 CUDA 计算，专门用于规避部分 Windows 机器上的 `0xC0000005`。
 
+脚本还会输出 `[STAGE] ...` 分阶段日志（如 `set_seed` / `select_device` / `configure_cuda_flags` / `build_lut`），用于定位 native 崩溃发生在哪一步。
+
 > 如果你想先快速验证流程是否通畅，可用：
 
 ```bash
