@@ -62,3 +62,20 @@ python infer_compare_cifar10.py
 - 插值后 8bit LUT：
   - `checkpoints/lut_relu_8bit_mnist.csv`
   - `checkpoints/lut_relu_8bit_cifar10.csv`
+
+
+## 若出现 `0xC0000005`（Windows）
+
+这个错误通常不是你代码逻辑问题，而是 **PyTorch 2.2.x 与 NumPy 2.x ABI 不兼容** 导致的原生库崩溃。
+
+建议在你的环境中执行：
+
+```bash
+pip uninstall -y numpy
+pip install "numpy<2"
+```
+
+然后重新运行脚本。
+
+本项目脚本现在会在最开始做环境检查：如果检测到 `numpy>=2.0` 会直接给出明确提示并退出，避免无提示崩溃。
+

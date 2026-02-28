@@ -2,21 +2,24 @@ import argparse
 import os
 from pathlib import Path
 
-import torch
-
-from relu_quant_lut import (
-    interpolate_lut_to_8bit,
-    load_lut_from_excel,
-    replace_quantrelu_with_lutrelu,
-    save_lut_8bit_csv,
-)
-from vgg11_data_utils import build_vgg11_quantrelu, evaluate, get_cifar10_loaders
-
+from env_check import ensure_runtime_compatibility
 
 PROJECT_DIR = Path(__file__).resolve().parent
 
 
 def run(args):
+    ensure_runtime_compatibility()
+
+    import torch
+
+    from relu_quant_lut import (
+        interpolate_lut_to_8bit,
+        load_lut_from_excel,
+        replace_quantrelu_with_lutrelu,
+        save_lut_8bit_csv,
+    )
+    from vgg11_data_utils import build_vgg11_quantrelu, evaluate, get_cifar10_loaders
+
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     _, test_loader = get_cifar10_loaders(batch_size=args.batch_size, data_root=args.data_root)
 

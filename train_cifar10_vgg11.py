@@ -2,17 +2,20 @@ import argparse
 import os
 from pathlib import Path
 
-import torch
-import torch.nn as nn
-import torch.optim as optim
-
-from vgg11_data_utils import build_vgg11_quantrelu, evaluate, get_cifar10_loaders, set_seed
-
+from env_check import ensure_runtime_compatibility
 
 PROJECT_DIR = Path(__file__).resolve().parent
 
 
 def train(args):
+    ensure_runtime_compatibility()
+
+    import torch
+    import torch.nn as nn
+    import torch.optim as optim
+
+    from vgg11_data_utils import build_vgg11_quantrelu, evaluate, get_cifar10_loaders, set_seed
+
     set_seed(args.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -43,7 +46,9 @@ def train(args):
         print(f"[CIFAR10] Epoch {epoch}/{args.epochs} | loss={train_loss:.4f} | val_acc={val_acc * 100:.2f}%")
 
     os.makedirs(os.path.dirname(args.save_path), exist_ok=True)
-    torch.save({"state_dict": model.state_dict()}, args.save_path)
+    import torch as _torch
+
+    _torch.save({"state_dict": model.state_dict()}, args.save_path)
     print(f"Saved CIFAR-10 VGG11 quantized-ReLU model to: {args.save_path}")
 
 
