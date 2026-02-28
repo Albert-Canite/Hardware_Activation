@@ -1,4 +1,6 @@
 import argparse
+import os
+from pathlib import Path
 
 import torch
 
@@ -9,6 +11,9 @@ from relu_quant_lut import (
     save_lut_8bit_csv,
 )
 from vgg11_data_utils import build_vgg11_quantrelu, evaluate, get_mnist_loaders
+
+
+PROJECT_DIR = Path(__file__).resolve().parent
 
 
 def run(args):
@@ -24,6 +29,7 @@ def run(args):
 
     xs, ys = load_lut_from_excel(args.lut_xlsx)
     x_256, y_256 = interpolate_lut_to_8bit(xs, ys)
+    os.makedirs(os.path.dirname(args.interp_lut_csv), exist_ok=True)
     save_lut_8bit_csv(x_256, y_256, args.interp_lut_csv)
 
     model_lut = build_vgg11_quantrelu(num_classes=10)
@@ -40,10 +46,10 @@ def run(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="MNIST inference: standard vs LUT-ReLU")
-    parser.add_argument("--data-root", type=str, default="./data")
-    parser.add_argument("--model-path", type=str, default="./checkpoints/mnist_vgg11_quantrelu8.pth")
-    parser.add_argument("--lut-xlsx", type=str, default="./LUT_ReLU.xlsx")
-    parser.add_argument("--interp-lut-csv", type=str, default="./checkpoints/lut_relu_8bit_mnist.csv")
+    parser.add_argument("--data-root", type=str, default=str(PROJECT_DIR / "data"))
+    parser.add_argument("--model-path", type=str, default=str(PROJECT_DIR / "checkpoints" / "mnist_vgg11_quantrelu8.pth"))
+    parser.add_argument("--lut-xlsx", type=str, default=str(PROJECT_DIR / "LUT_ReLU.xlsx"))
+    parser.add_argument("--interp-lut-csv", type=str, default=str(PROJECT_DIR / "checkpoints" / "lut_relu_8bit_mnist.csv"))
     parser.add_argument("--batch-size", type=int, default=128)
     args = parser.parse_args()
     run(args)

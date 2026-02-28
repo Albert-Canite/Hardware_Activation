@@ -1,11 +1,15 @@
 import argparse
 import os
+from pathlib import Path
 
 import torch
 import torch.nn as nn
 import torch.optim as optim
 
 from vgg11_data_utils import build_vgg11_quantrelu, evaluate, get_mnist_loaders, set_seed
+
+
+PROJECT_DIR = Path(__file__).resolve().parent
 
 
 def train(args):
@@ -45,8 +49,8 @@ def train(args):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train VGG11 on MNIST with 8-bit QuantReLU")
-    parser.add_argument("--data-root", type=str, default="./data")
-    parser.add_argument("--save-path", type=str, default="./checkpoints/mnist_vgg11_quantrelu8.pth")
+    parser.add_argument("--data-root", type=str, default=str(PROJECT_DIR / "data"))
+    parser.add_argument("--save-path", type=str, default=str(PROJECT_DIR / "checkpoints" / "mnist_vgg11_quantrelu8.pth"))
     parser.add_argument("--epochs", type=int, default=10)
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--lr", type=float, default=0.01)
