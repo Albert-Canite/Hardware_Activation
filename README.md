@@ -26,10 +26,26 @@
 ## 运行方式（直接一条命令）
 
 ```bash
-python train_and_validate.py --epochs 10 --batch-size 128
+python train_and_validate.py --epochs 10 --batch-size 32
 ```
 
 > 说明：直接在 IDE 里点 run 也可以，不需要命令行参数。脚本默认 `num_workers=0`，是为了避免 Windows + CUDA 下某些环境出现 `0xC0000005` 原生崩溃。
+
+脚本新增了 **CUDA 子进程烟雾测试**：
+
+- 如果检测到 CUDA 可能不稳定（包括你遇到的 `0xC0000005` 类型崩溃风险），会自动回退到 CPU，避免直接闪退。
+- 你仍可手工指定：
+  - `--device auto`（默认，推荐）
+  - `--device cuda`
+  - `--device cpu`
+
+如果你**必须使用 GPU**，请使用：
+
+```bash
+python train_and_validate.py --device cuda --require-gpu
+```
+
+并保持默认安全模式（`--gpu-safe-mode`，默认开启），该模式会禁用 `cudnn` 高风险路径但仍然使用 CUDA 计算，专门用于规避部分 Windows 机器上的 `0xC0000005`。
 
 > 如果你想先快速验证流程是否通畅，可用：
 

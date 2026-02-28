@@ -3,6 +3,8 @@ import copy
 import os
 import platform
 import random
+import subprocess
+import sys
 from dataclasses import dataclass
 from typing import Callable, Dict, Tuple
 
@@ -29,6 +31,57 @@ def set_seed(seed: int = 42) -> None:
     np.random.seed(seed)
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
+
+
+def select_device(device_arg: str = "auto", require_gpu: bool = False) -> torch.device:
+    """
+    Robust device selector.
+    - auto: prefer CUDA if available AND a subprocess smoke test passes.
+    - cuda: require CUDA smoke test pass, else fallback to CPU with warning.
+    - cpu: force CPU.
+    """
+    if device_arg == "cpu":
+        if require_gpu:
+            raise RuntimeError("GPU is required (--require-gpu) but --device cpu was provided.")
+        return torch.device("cpu")
+
+    if not torch.cuda.is_available():
+        if require_gpu or device_arg == "cuda":
+            raise RuntimeError("CUDA is not available, but GPU execution is required.")
+        return torch.device("cpu")
+
+    # 子进程做 CUDA 烟雾测试，避免主进程直接崩溃（0xC0000005）
+    probe_code = (
+        "import torch; "
+        "assert torch.cuda.is_available(); "
+        "x=torch.randn(64,64,device='cuda'); "
+        "y=torch.relu(x); "
+        "z=(y@y.T).sum(); "
+        "z.item(); "
+        "print('CUDA_PROBE_OK')"
+    )
+    try:
+        p = subprocess.run(
+            [sys.executable, "-c", probe_code],
+            capture_output=True,
+            text=True,
+            timeout=20,
+        )
+        if p.returncode == 0 and "CUDA_PROBE_OK" in p.stdout:
+            return torch.device("cuda")
+        if require_gpu or device_arg == "cuda":
+            raise RuntimeError(
+                "CUDA probe failed (returncode={}): {} {}".format(
+                    p.returncode, p.stdout.strip(), p.stderr.strip()
+                )
+            )
+        print("[WARN] CUDA probe failed in auto mode. Falling back to CPU.")
+        return torch.device("cpu")
+    except Exception as exc:
+        if require_gpu or device_arg == "cuda":
+            raise RuntimeError(f"CUDA probe exception: {exc}")
+        print(f"[WARN] CUDA probe exception: {exc}. Falling back to CPU.")
+        return torch.device("cpu")
 
 
 def quantize_8bit(x: torch.Tensor, qmin: float = QMIN, qmax: float = QMAX) -> torch.Tensor:
@@ -220,10 +273,16 @@ def replace_quant_relu_with_lut(module: nn.Module, lut_x: np.ndarray, lut_y: np.
 
 
 def run_for_dataset(args, dataset_name: str, lut_x: np.ndarray, lut_y: np.ndarray, device: torch.device) -> Dict[str, float]:
+    print(f"[INFO] Preparing dataloaders for {dataset_name}...")
     spec, train_loader, test_loader = get_dataloaders(
-        dataset_name, args.data_root, args.batch_size, args.num_workers, pin_memory=(device.type == "cuda")
+        dataset_name,
+        args.data_root,
+        args.batch_size,
+        args.num_workers,
+        pin_memory=(device.type == "cuda" and not args.disable_pin_memory),
     )
 
+    print(f"[INFO] Building model for {spec.name}...")
     model = VGG11Small(spec.num_classes, spec.in_channels, activation_factory=QuantizedReLU).to(device)
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
@@ -262,9 +321,15 @@ def parse_args():
     parser.add_argument("--output-dir", type=str, default="./outputs")
     parser.add_argument("--lut-file", type=str, default="./LUT_ReLU.xlsx")
     parser.add_argument("--epochs", type=int, default=10)
-    parser.add_argument("--batch-size", type=int, default=128)
+    parser.add_argument("--batch-size", type=int, default=32)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--num-workers", type=int, default=0)
+    parser.add_argument("--device", type=str, default="auto", choices=["auto", "cpu", "cuda"])
+    parser.add_argument("--require-gpu", action="store_true", help="Fail fast if GPU is not usable")
+    parser.add_argument("--disable-pin-memory", action="store_true", help="Disable DataLoader pin_memory (can help on Windows GPU issues)")
+    parser.add_argument("--gpu-safe-mode", dest="gpu_safe_mode", action="store_true", help="Use safer CUDA runtime settings")
+    parser.add_argument("--no-gpu-safe-mode", dest="gpu_safe_mode", action="store_false", help="Disable safer CUDA runtime settings")
+    parser.set_defaults(gpu_safe_mode=True)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--max-train-batches", type=int, default=None, help="Optional debug cap per epoch")
     parser.add_argument("--max-test-batches", type=int, default=None, help="Optional debug cap for eval")
@@ -279,15 +344,28 @@ def main():
     if platform.system().lower() == "windows" and args.num_workers > 0:
         print("[WARN] Windows detected: forcing num_workers=0 for stability.")
         args.num_workers = 0
+    if platform.system().lower() == "windows":
+        # Windows 环境默认关闭 pin_memory，避免部分驱动/环境在 page-locked 内存路径崩溃
+        args.disable_pin_memory = True
 
     set_seed(args.seed)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = select_device(args.device, require_gpu=args.require_gpu)
     print(f"Using device: {device}")
 
     if device.type == "cuda":
         # 关闭 benchmark 可避免部分机器上 cudnn 自动算法选择触发不稳定问题
         torch.backends.cudnn.benchmark = False
         torch.backends.cudnn.deterministic = True
+        if args.gpu_safe_mode:
+            # 很多 0xC0000005 发生在 cudnn 内核路径，safe mode 下禁用 cudnn 但保留 CUDA 计算
+            torch.backends.cudnn.enabled = False
+            torch.backends.cuda.matmul.allow_tf32 = False
+            print("[INFO] GPU safe mode enabled: cudnn disabled, tf32 disabled.")
+        # 进一步降低原生崩溃概率：限制每进程显存占比，避免 OOM 触发驱动异常
+        try:
+            torch.cuda.set_per_process_memory_fraction(0.9)
+        except Exception:
+            pass
 
     lut_csv_path = os.path.join(args.output_dir, "relu_lut_8bit.csv")
     lut_x, lut_y = build_interpolated_lut(args.lut_file, lut_csv_path)
