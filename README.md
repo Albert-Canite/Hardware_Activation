@@ -52,6 +52,9 @@ python train_and_validate.py --device cuda --require-gpu
 为避免 IDE 被原生崩溃直接杀死，脚本默认采用“主进程 + 训练子进程”模式。
 如果子进程触发 `0xC0000005`，主进程会给出明确错误归因，而不是直接无提示闪退。
 
+脚本最开始还会执行 `[BOOT] preflight import probe`，先在子进程里验证 `numpy/torch/openpyxl` 能否被安全导入。
+若这里就报 `0xC0000005`，说明崩溃发生在**训练前的原生库导入阶段**，不是模型训练逻辑。
+
 > 如果你想先快速验证流程是否通畅，可用：
 
 ```bash

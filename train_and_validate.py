@@ -9,6 +9,41 @@ import sys
 from dataclasses import dataclass
 from typing import Callable, Dict, Tuple
 
+
+# ---- Ultra-early preflight (stdlib only) ----
+# Some Windows environments can hard-crash on native imports (e.g., torch) with 0xC0000005
+# before any normal Python logging is printed. This preflight runs first and isolates import
+# checks in a subprocess so we can still print diagnostics in the parent process.
+if os.environ.get("TRAIN_VALIDATE_SKIP_PREFLIGHT", "0") != "1":
+    try:
+        print("[BOOT] Starting preflight import probe...")
+        sys.stdout.flush()
+        probe = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                "import numpy, torch; from openpyxl import load_workbook; print('IMPORT_PROBE_OK')",
+            ],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        if probe.returncode in (3221225477, -1073741819):
+            print("[FATAL] Preflight import probe crashed with 0xC0000005.")
+            print("[FATAL] Crash occurs during native package import (numpy/torch/openpyxl), before training starts.")
+            print("[FATAL] This is typically environment/runtime issue (driver/DLL/OpenMP conflict), not model code.")
+            sys.exit(1)
+        if probe.returncode != 0:
+            print("[FATAL] Preflight import probe failed.")
+            print(probe.stdout)
+            print(probe.stderr)
+            sys.exit(probe.returncode)
+        print("[BOOT] Preflight import probe passed.")
+        sys.stdout.flush()
+    except Exception as preflight_exc:
+        print(f"[FATAL] Preflight probe exception: {preflight_exc}")
+        sys.exit(1)
+
 import numpy as np
 import torch
 import torch.nn as nn
