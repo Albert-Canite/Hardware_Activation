@@ -1,12 +1,12 @@
 import subprocess
 import sys
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, List, Tuple
 
 WINDOWS_ACCESS_VIOLATION_CODES = {-1073741819, 3221225477, -1}
 
 
-def _probe_import(cmd: list[str]) -> tuple[int, str]:
+def _probe_import(cmd: List[str]) -> Tuple[int, str]:
     p = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
     out = (p.stdout or "").strip()
     return p.returncode, out
