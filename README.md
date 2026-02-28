@@ -29,10 +29,31 @@ python train_vgg11_quant_lut.py --epochs 1 --batch-size 128 --lr 1e-3
 - `--lut-path`: LUT 文件路径（默认 `./LUT_ReLU.xlsx`）。
 - `--data-dir`: 数据集下载目录（默认 `./data`）。
 - `--output-dir`: 输出目录（默认 `./outputs`）。
+- `--num-workers`: DataLoader 进程数（默认 `0`，Windows 更稳定）。
+- `--device`: `auto/cpu/cuda`。
+
+## Windows / CUDA 崩溃排查（如出现 0xC0000005）
+
+如果出现你反馈的类似：
+
+```text
+Using device: cuda
+Process finished with exit code -1073741819 (0xC0000005)
+```
+
+建议优先使用下面命令验证流程：
+
+```bash
+python train_vgg11_quant_lut.py --device cpu --num-workers 0 --epochs 1
+```
+
+如要继续用 GPU，再尝试：
+
+```bash
+python train_vgg11_quant_lut.py --device cuda --num-workers 0 --batch-size 64
+```
 
 ## 输出示例
-
-运行结束后会有类似输出：
 
 ```text
 MNIST | Standard ReLU Acc: xx.xx% | LUT ReLU Acc: xx.xx%

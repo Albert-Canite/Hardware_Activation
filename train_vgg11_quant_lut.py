@@ -127,7 +127,13 @@ def build_vgg11(num_classes: int, in_channels: int, quantizer: Quantizer8Bit) ->
     return model
 
 
-def get_dataloaders(dataset_name: str, batch_size: int, data_dir: Path) -> Tuple[DataLoader, DataLoader, int, int]:
+def get_dataloaders(
+    dataset_name: str,
+    batch_size: int,
+    data_dir: Path,
+    num_workers: int,
+    pin_memory: bool,
+) -> Tuple[DataLoader, DataLoader, int, int]:
     if dataset_name == "mnist":
         transform = transforms.Compose([
             transforms.Resize((32, 32)),
@@ -137,8 +143,8 @@ def get_dataloaders(dataset_name: str, batch_size: int, data_dir: Path) -> Tuple
         train_set = datasets.MNIST(root=data_dir, train=True, download=True, transform=transform)
         test_set = datasets.MNIST(root=data_dir, train=False, download=True, transform=transform)
         return (
-            DataLoader(train_set, batch_size=batch_size, shuffle=True, num_workers=2, pin_memory=True),
-            DataLoader(test_set, batch_size=batch_size, shuffle=False, num_workers=2, pin_memory=True),
+            DataLoader(train_set, batch_size=batch_size, shuffle=True, num_workers=num_workers, pin_memory=pin_memory),
+            DataLoader(test_set, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=pin_memory),
             10,
             1,
         )
@@ -157,8 +163,8 @@ def get_dataloaders(dataset_name: str, batch_size: int, data_dir: Path) -> Tuple
         train_set = datasets.CIFAR10(root=data_dir, train=True, download=True, transform=transform_train)
         test_set = datasets.CIFAR10(root=data_dir, train=False, download=True, transform=transform_test)
         return (
-            DataLoader(train_set, batch_size=batch_size, shuffle=True, num_workers=2, pin_memory=True),
-            DataLoader(test_set, batch_size=batch_size, shuffle=False, num_workers=2, pin_memory=True),
+            DataLoader(train_set, batch_size=batch_size, shuffle=True, num_workers=num_workers, pin_memory=pin_memory),
+            DataLoader(test_set, batch_size=batch_size, shuffle=False, num_workers=num_workers, pin_memory=pin_memory),
             10,
             3,
         )
@@ -201,11 +207,19 @@ def train_dataset(
     lr: float,
     data_dir: Path,
     output_dir: Path,
+    num_workers: int,
+    pin_memory: bool,
     quantizer: Quantizer8Bit,
     lut_values_8bit: np.ndarray,
     device: torch.device,
 ) -> Dict[str, float]:
-    train_loader, test_loader, num_classes, in_channels = get_dataloaders(dataset_name, batch_size, data_dir)
+    train_loader, test_loader, num_classes, in_channels = get_dataloaders(
+        dataset_name,
+        batch_size,
+        data_dir,
+        num_workers,
+        pin_memory,
+    )
 
     model = build_vgg11(num_classes=num_classes, in_channels=in_channels, quantizer=quantizer).to(device)
     criterion = nn.CrossEntropyLoss()
@@ -241,11 +255,24 @@ def main() -> None:
     parser.add_argument("--data-dir", type=Path, default=Path("./data"))
     parser.add_argument("--output-dir", type=Path, default=Path("./outputs"))
     parser.add_argument("--lut-path", type=Path, default=Path("./LUT_ReLU.xlsx"))
+    parser.add_argument("--num-workers", type=int, default=0, help="DataLoader workers. Use 0 for best Windows stability.")
+    parser.add_argument("--device", type=str, default="auto", choices=["auto", "cpu", "cuda"])
     args = parser.parse_args()
 
     set_seed(args.seed)
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    if args.device == "cpu":
+        device = torch.device("cpu")
+    elif args.device == "cuda":
+        if not torch.cuda.is_available():
+            raise RuntimeError("--device cuda was requested but CUDA is not available.")
+        device = torch.device("cuda")
+    else:
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
     print(f"Using device: {device}")
+    print(f"DataLoader num_workers={args.num_workers}")
 
     args.output_dir.mkdir(parents=True, exist_ok=True)
     args.data_dir.mkdir(parents=True, exist_ok=True)
@@ -256,6 +283,7 @@ def main() -> None:
     print(f"Saved interpolated 8-bit LUT: {lut_8bit_path}")
 
     quantizer = Quantizer8Bit(min_val=-1.0, max_val=1.0, levels=256)
+    pin_memory = device.type == "cuda"
 
     results = {}
     for dataset_name in ["mnist", "cifar10"]:
@@ -266,6 +294,8 @@ def main() -> None:
             lr=args.lr,
             data_dir=args.data_dir,
             output_dir=args.output_dir,
+            num_workers=args.num_workers,
+            pin_memory=pin_memory,
             quantizer=quantizer,
             lut_values_8bit=lut_values_8bit,
             device=device,
