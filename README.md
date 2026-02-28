@@ -94,3 +94,5 @@ pip install "numpy<2"
 如果 worker 发生 Windows `0xC0000005`，启动器会捕获返回码并打印 `[CRASH GUARD]` 诊断信息，而不是直接无提示退出。
 
 在部分 Windows IDE 中，native 崩溃可能显示为 `exit code -1`，也按 access violation 处理。
+
+当出现 `[CRASH GUARD]` 时，启动器会自动执行 runtime probe（分别探测 `import torch`、`import torchvision`、`vgg11` 构建），帮助你定位崩溃发生点。
