@@ -1,4 +1,4 @@
 torch==2.2.2
-torchvision
+torchvision==0.17.2
 numpy
 openpyxl

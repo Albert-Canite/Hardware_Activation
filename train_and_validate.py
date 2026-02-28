@@ -12,8 +12,10 @@ def run_preflight() -> int:
             "-c",
             (
                 "import torch, numpy; from openpyxl import load_workbook; "
+                "import torchvision; "
                 "print('IMPORT_PROBE_OK'); "
                 "print('torch_version=', torch.__version__); "
+                "print('torchvision_version=', torchvision.__version__); "
                 "print('torch_cuda_build=', torch.version.cuda); "
                 "print('cuda_available=', torch.cuda.is_available())"
             ),
@@ -34,6 +36,13 @@ def run_preflight() -> int:
         print(probe.stdout)
         print(probe.stderr)
         return probe.returncode
+
+    # Basic compatibility hint: torch 2.2.x is expected to pair with torchvision 0.17.x
+    if "torch_version= 2.2." in probe.stdout and "torchvision_version= 0.17." not in probe.stdout:
+        print("[FATAL] Detected torch/torchvision version mismatch for torch 2.2.x runtime.")
+        print("[FATAL] Expected torchvision 0.17.x with torch 2.2.x.")
+        print(probe.stdout.strip())
+        return 1
 
     print(probe.stdout.strip())
     print("[BOOT] Preflight import probe passed.")

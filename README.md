@@ -22,9 +22,10 @@
 
 - Python 3.8.18
 - PyTorch 2.2.2
+- torchvision 0.17.2（必须与 torch 2.2.2 配套）
 - CUDA 12.1
 
-额外依赖：`torchvision`, `openpyxl`, `numpy`
+额外依赖：`torchvision==0.17.2`, `openpyxl`, `numpy`
 
 ## 运行方式（直接一条命令）
 
