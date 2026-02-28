@@ -7,7 +7,7 @@ from pathlib import Path
 from env_check import ensure_runtime_compatibility
 
 PROJECT_DIR = Path(__file__).resolve().parent
-WINDOWS_ACCESS_VIOLATION = -1073741819
+WINDOWS_ACCESS_VIOLATION_CODES = {-1073741819, 3221225477, -1}
 
 
 def _train_worker(args):
@@ -62,14 +62,18 @@ def _train_worker(args):
 def _run_with_crash_guard():
     cmd = [sys.executable, str(Path(__file__).resolve()), *sys.argv[1:], "--_worker"]
     ret = subprocess.run(cmd).returncode
-    if ret == WINDOWS_ACCESS_VIOLATION:
-        print("\n[CRASH GUARD] Worker exited with 0xC0000005 (Access Violation).")
+    if ret in WINDOWS_ACCESS_VIOLATION_CODES:
+        print("\n[CRASH GUARD] Worker exited with code indicating Windows access violation (0xC0000005).")
+        print(f"[CRASH GUARD] Raw worker return code: {ret}")
         print("[CRASH GUARD] This usually means native runtime conflict (PyTorch/CUDA/MKL DLL), not Python logic.")
         print("[CRASH GUARD] Please try in your PyONN env:")
         print("  1) conda install -y cpuonly pytorch torchvision pytorch-cuda=none -c pytorch")
         print("  2) or reinstall a matching CUDA stack for torch 2.2.2 + cu121")
         print("  3) set IDE Run configuration env: CUDA_VISIBLE_DEVICES=-1")
         return 1
+    if ret != 0:
+        print(f"[CRASH GUARD] Worker failed with non-zero exit code: {ret}")
+        print("[CRASH GUARD] If this is on Windows IDE, check interpreter path and try running from terminal once.")
     return ret
 
 

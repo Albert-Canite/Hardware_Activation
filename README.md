@@ -92,3 +92,5 @@ pip install "numpy<2"
 
 现在四个主脚本使用“启动器 + worker 子进程”模式。
 如果 worker 发生 Windows `0xC0000005`，启动器会捕获返回码并打印 `[CRASH GUARD]` 诊断信息，而不是直接无提示退出。
+
+在部分 Windows IDE 中，native 崩溃可能显示为 `exit code -1`，也按 access violation 处理。
