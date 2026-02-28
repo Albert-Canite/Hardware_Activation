@@ -96,3 +96,5 @@ pip install "numpy<2"
 在部分 Windows IDE 中，native 崩溃可能显示为 `exit code -1`，也按 access violation 处理。
 
 当出现 `[CRASH GUARD]` 时，启动器会自动执行 runtime probe（分别探测 `import torch`、`import torchvision`、`vgg11` 构建），帮助你定位崩溃发生点。
+
+新增稳定模式：worker 启动后会限制 torch 线程并关闭 MKLDNN，同时执行一个极小前向/反向自检，用于提前识别 CPU 原生内核崩溃。

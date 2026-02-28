@@ -5,6 +5,7 @@ from pathlib import Path
 
 from crash_guard import run_worker_with_guard
 from env_check import ensure_runtime_compatibility
+from runtime_config import apply_torch_stability_mode, tiny_torch_self_check
 
 PROJECT_DIR = Path(__file__).resolve().parent
 
@@ -15,6 +16,8 @@ def _run_worker(args):
         os.environ.setdefault("CUDA_VISIBLE_DEVICES", "-1")
 
     import torch
+
+    apply_torch_stability_mode(torch)
 
     from relu_quant_lut import (
         interpolate_lut_to_8bit,
@@ -28,6 +31,7 @@ def _run_worker(args):
     if use_cuda and not torch.cuda.is_available():
         raise RuntimeError("--device cuda was requested, but CUDA is not available or CUDA runtime is broken.")
     device = torch.device("cuda" if use_cuda else "cpu")
+    tiny_torch_self_check(torch, device)
 
     _, test_loader = get_mnist_loaders(batch_size=args.batch_size, data_root=args.data_root)
     ckpt = torch.load(args.model_path, map_location="cpu")
