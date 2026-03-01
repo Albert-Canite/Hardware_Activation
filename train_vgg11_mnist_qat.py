@@ -45,9 +45,12 @@ class Uniform8BitQuantizer(nn.Module):
         self.step = (qmax - qmin) / (levels - 1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = ClampSTE.apply(x, self.qmin, self.qmax)
+        # STE clamp/round implemented with detach() so traced model can be exported.
+        x_clamped = torch.clamp(x, self.qmin, self.qmax)
+        x = x + (x_clamped - x).detach()
         x = (x - self.qmin) / self.step
-        x = RoundSTE.apply(x)
+        x_rounded = torch.round(x)
+        x = x + (x_rounded - x).detach()
         return x * self.step + self.qmin
 
 
@@ -73,6 +76,18 @@ class HardwareLUTReLUSim(nn.Module):
             self.running_absmax.mul_(self.ema_momentum).add_(current * (1.0 - self.ema_momentum))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
+        was_quantized = x.is_quantized
+        q_dtype = None
+        q_scale = None
+        q_zero_point = None
+        if was_quantized:
+            qscheme = x.qscheme()
+            if qscheme in (torch.per_tensor_affine, torch.per_tensor_symmetric):
+                q_dtype = x.dtype
+                q_scale = float(x.q_scale())
+                q_zero_point = int(x.q_zero_point())
+            x = x.dequantize()
+
         if self.training:
             self._update_running_absmax(x)
 
@@ -81,7 +96,10 @@ class HardwareLUTReLUSim(nn.Module):
         xq = self.input_quant(x_norm)
         y = self.relu(xq)
         yq = self.output_quant(y)
-        return yq * scale
+        out = yq * scale
+        if was_quantized and q_dtype is not None and q_scale is not None and q_zero_point is not None:
+            out = torch.quantize_per_tensor(out, scale=q_scale, zero_point=q_zero_point, dtype=q_dtype)
+        return out
 
 
 class QuantizableVGG11MNIST(nn.Module):
