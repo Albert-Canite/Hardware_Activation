@@ -4,22 +4,27 @@
 
 - `train_vgg11_mnist_qat.py`
 
-## 为什么之前训练会卡在 10% 左右
+## 为什么之前会一直 10% 左右
 
-核心原因不是“硬件激活无法实现”，而是之前实现把每层激活都**硬压缩到 [0,1] 且不做尺度恢复**，导致深层网络信号幅度塌缩、梯度和特征表达能力严重受限。
+之前实现中两件事叠加导致训练塌缩：
 
-本版本修复：
-- 仍严格执行硬件激活约束：输入 `[-1,1]` 8-bit -> ReLU -> 输出 `[0,1]` 8-bit。
-- 增加每层激活后的**可学习尺度恢复**（trainable scale recovery），保持硬件 LUT 约束同时让网络可训练。
+1. 每层激活都强约束到硬件域，如果输入分布不匹配，很多层会饱和，梯度信息很差。
+2. 从第 1 个 epoch 就开启全量 QAT fake-quant，优化会更难。
+
+本版修复：
+- 激活改为**自适应归一化 + 硬件量化**：先把每层输入按运行统计缩放到接近 `[-1,1]`，再做 8-bit LUT 约束，最后再缩放回网络尺度。
+- 增加 `--qat-start-epoch`（默认 6）：前几轮先学到可用特征，再进入 QAT。
+- 使用 `vgg11_bn`（仍是 VGG11 主干）提升稳定性。
 
 ## 满足的核心需求
 
-- 标准 VGG-11（`torchvision.models.vgg11`）训练 MNIST（输入 resize 到 32×32）。
-- 每一层激活都模拟硬件 ReLU：
-  - 输入量化：`[-1,1]`，8-bit，256 点
-  - 输出量化：`[0,1]`，8-bit，256 点
-- 启用 QAT（8-bit fake quant），训练后导出 INT8 TorchScript。
-- 导出硬件 ReLU LUT（256 行）：`artifacts/hardware_relu_lut.csv`
+- 每一层激活都模拟硬件 ReLU：输入 `[-1,1]` 8-bit -> ReLU -> 输出 `[0,1]` 8-bit。
+- 训练流程仍是一键运行，默认参数可直接跑。
+- 训练完成导出：
+  - `artifacts/vgg11_mnist_qat_best.pth`
+  - `artifacts/vgg11_mnist_qat_final.pth`
+  - `artifacts/vgg11_mnist_int8_scripted.pt`
+  - `artifacts/hardware_relu_lut.csv`
 
 ## 直接运行
 
@@ -27,11 +32,8 @@
 python train_vgg11_mnist_qat.py
 ```
 
-> 默认值已设置为可直接运行：`epochs=25`、`lr=3e-4`、`num_workers=0`（兼容 Windows IDE 运行）。
-
-## 产物
-
-- `artifacts/vgg11_mnist_qat_best.pth`
-- `artifacts/vgg11_mnist_qat_final.pth`
-- `artifacts/vgg11_mnist_int8_scripted.pt`
-- `artifacts/hardware_relu_lut.csv`
+默认值：
+- `epochs=25`
+- `lr=3e-4`
+- `qat-start-epoch=6`
+- `num-workers=0`

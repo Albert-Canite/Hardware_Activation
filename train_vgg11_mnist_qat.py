@@ -6,12 +6,9 @@ from dataclasses import dataclass
 import torch
 import torch.nn as nn
 import torch.optim as optim
-from torch.ao.quantization import QConfig, convert, prepare_qat
+from torch.ao.quantization import QConfig, convert, disable_fake_quant, enable_fake_quant, prepare_qat
 from torch.ao.quantization.fake_quantize import FakeQuantize
-from torch.ao.quantization.observer import (
-    MovingAverageMinMaxObserver,
-    MovingAveragePerChannelMinMaxObserver,
-)
+from torch.ao.quantization.observer import MovingAverageMinMaxObserver, MovingAveragePerChannelMinMaxObserver
 from torch.utils.data import DataLoader
 from torchvision import datasets, models, transforms
 
@@ -56,46 +53,41 @@ class Uniform8BitQuantizer(nn.Module):
 
 class HardwareLUTReLUSim(nn.Module):
     """
-    Trainable hardware-LUT simulation.
+    Hardware activation simulation with adaptive normalization.
 
-    Forward path:
-      1) Normalize pre-activation by learnable input_scale -> domain around [-1,1]
-      2) Quantize to 8-bit in [-1,1]
-      3) ReLU
-      4) Quantize to 8-bit in [0,1]
-      5) Re-scale by learnable output_scale for downstream layers
-
-    This keeps the LUT I/O contract while preventing global signal collapse.
+    Input is adaptively normalized to avoid saturation, then quantized to [-1,1] 8-bit,
+    passed through ReLU, quantized to [0,1] 8-bit, and rescaled back.
     """
 
-    def __init__(self, init_input_scale: float = 3.0, init_output_scale: float = 3.0):
+    def __init__(self, ema_momentum: float = 0.95):
         super().__init__()
         self.input_quant = Uniform8BitQuantizer(-1.0, 1.0, 256)
         self.relu = nn.ReLU(inplace=False)
         self.output_quant = Uniform8BitQuantizer(0.0, 1.0, 256)
+        self.ema_momentum = ema_momentum
+        self.register_buffer("running_absmax", torch.tensor(1.0))
 
-        # Positive trainable scales (softplus to keep > 0)
-        self.input_scale_raw = nn.Parameter(torch.tensor(float(init_input_scale)).log())
-        self.output_scale_raw = nn.Parameter(torch.tensor(float(init_output_scale)).log())
-
-    def _positive(self, raw: torch.Tensor) -> torch.Tensor:
-        return torch.nn.functional.softplus(raw) + 1e-6
+    def _update_running_absmax(self, x: torch.Tensor):
+        with torch.no_grad():
+            current = x.detach().abs().amax().clamp(min=1e-3)
+            self.running_absmax.mul_(self.ema_momentum).add_(current * (1.0 - self.ema_momentum))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        in_scale = self._positive(self.input_scale_raw)
-        out_scale = self._positive(self.output_scale_raw)
+        if self.training:
+            self._update_running_absmax(x)
 
-        x_norm = x / in_scale
+        scale = self.running_absmax.clamp(min=1e-3)
+        x_norm = x / scale
         xq = self.input_quant(x_norm)
         y = self.relu(xq)
         yq = self.output_quant(y)
-        return yq * out_scale
+        return yq * scale
 
 
 class QuantizableVGG11MNIST(nn.Module):
     def __init__(self):
         super().__init__()
-        base_model = models.vgg11(weights=None)
+        base_model = models.vgg11_bn(weights=None)
 
         base_model.features[0] = nn.Conv2d(1, 64, kernel_size=3, stride=1, padding=1)
         base_model.avgpool = nn.AdaptiveAvgPool2d((7, 7))
@@ -128,12 +120,10 @@ def export_hardware_relu_lut(output_path: str):
     os.makedirs(os.path.dirname(output_path), exist_ok=True)
     quant_in = Uniform8BitQuantizer(-1.0, 1.0, 256)
     quant_out = Uniform8BitQuantizer(0.0, 1.0, 256)
-
     xs = torch.linspace(-1.0, 1.0, steps=256)
     with torch.no_grad():
         xq = quant_in(xs)
         yq = quant_out(torch.relu(xq))
-
     with open(output_path, "w", encoding="utf-8") as f:
         f.write("index,input,output\n")
         for idx, (xv, yv) in enumerate(zip(xq.tolist(), yq.tolist())):
@@ -149,48 +139,46 @@ class EpochStats:
 def train_one_epoch(model, loader, optimizer, criterion, device, max_batches=None):
     model.train()
     running_loss, correct, total = 0.0, 0, 0
-
     for batch_idx, (inputs, targets) in enumerate(loader):
         if max_batches is not None and batch_idx >= max_batches:
             break
-
         inputs = inputs.to(device)
         targets = targets.to(device)
-
         optimizer.zero_grad()
         outputs = model(inputs)
         loss = criterion(outputs, targets)
         loss.backward()
         optimizer.step()
-
         running_loss += loss.item() * targets.size(0)
         _, predicted = outputs.max(1)
         total += targets.size(0)
         correct += predicted.eq(targets).sum().item()
-
     return EpochStats(loss=running_loss / total, accuracy=100.0 * correct / total)
 
 
 def evaluate(model, loader, criterion, device, max_batches=None):
     model.eval()
     running_loss, correct, total = 0.0, 0, 0
-
     with torch.no_grad():
         for batch_idx, (inputs, targets) in enumerate(loader):
             if max_batches is not None and batch_idx >= max_batches:
                 break
-
             inputs = inputs.to(device)
             targets = targets.to(device)
             outputs = model(inputs)
             loss = criterion(outputs, targets)
-
             running_loss += loss.item() * targets.size(0)
             _, predicted = outputs.max(1)
             total += targets.size(0)
             correct += predicted.eq(targets).sum().item()
-
     return EpochStats(loss=running_loss / total, accuracy=100.0 * correct / total)
+
+
+def set_fake_quant_enabled(model: nn.Module, enabled: bool):
+    if enabled:
+        model.apply(enable_fake_quant)
+    else:
+        model.apply(disable_fake_quant)
 
 
 def main():
@@ -198,6 +186,7 @@ def main():
     parser.add_argument("--data-dir", type=str, default="./data")
     parser.add_argument("--output-dir", type=str, default="./artifacts")
     parser.add_argument("--epochs", type=int, default=25)
+    parser.add_argument("--qat-start-epoch", type=int, default=6)
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--seed", type=int, default=42)
@@ -214,31 +203,15 @@ def main():
         transforms.ToTensor(),
         transforms.Lambda(scale_to_signed_unit),
     ])
-
     train_set = datasets.MNIST(root=args.data_dir, train=True, download=True, transform=transform)
     test_set = datasets.MNIST(root=args.data_dir, train=False, download=True, transform=transform)
-
     train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, pin_memory=torch.cuda.is_available())
     test_loader = DataLoader(test_set, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers, pin_memory=torch.cuda.is_available())
 
     model = QuantizableVGG11MNIST().to(device)
-
     model.qconfig = QConfig(
-        activation=FakeQuantize.with_args(
-            observer=MovingAverageMinMaxObserver,
-            quant_min=0,
-            quant_max=255,
-            dtype=torch.quint8,
-            qscheme=torch.per_tensor_affine,
-        ),
-        weight=FakeQuantize.with_args(
-            observer=MovingAveragePerChannelMinMaxObserver,
-            quant_min=-128,
-            quant_max=127,
-            dtype=torch.qint8,
-            qscheme=torch.per_channel_symmetric,
-            ch_axis=0,
-        ),
+        activation=FakeQuantize.with_args(observer=MovingAverageMinMaxObserver, quant_min=0, quant_max=255, dtype=torch.quint8, qscheme=torch.per_tensor_affine),
+        weight=FakeQuantize.with_args(observer=MovingAveragePerChannelMinMaxObserver, quant_min=-128, quant_max=127, dtype=torch.qint8, qscheme=torch.per_channel_symmetric, ch_axis=0),
     )
     prepare_qat(model, inplace=True)
 
@@ -250,9 +223,12 @@ def main():
     best_acc = 0.0
 
     print(f"Using device: {device}")
-    print("Hardware ReLU simulation: input [-1,1] 8-bit -> ReLU -> output [0,1] 8-bit + trainable scale recovery")
+    print("Hardware ReLU simulation: input [-1,1] 8-bit -> ReLU -> output [0,1] 8-bit (adaptive normalization)")
+    print(f"QAT fake quant starts at epoch {args.qat_start_epoch}")
 
     for epoch in range(1, args.epochs + 1):
+        set_fake_quant_enabled(model, enabled=(epoch >= args.qat_start_epoch))
+
         train_stats = train_one_epoch(model, train_loader, optimizer, criterion, device, args.limit_train_batches)
         val_stats = evaluate(model, test_loader, criterion, device, args.limit_val_batches)
         scheduler.step()
