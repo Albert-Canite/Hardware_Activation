@@ -248,9 +248,11 @@ def main():
 
     model_cpu = copy.deepcopy(model).to("cpu").eval()
     quantized_model = convert(model_cpu, inplace=False)
-    scripted = torch.jit.script(quantized_model)
-    int8_path = os.path.join(args.output_dir, "vgg11_mnist_int8_scripted.pt")
-    scripted.save(int8_path)
+    # Use trace instead of script because custom autograd STE ops are not script-exportable.
+    example_input = torch.randn(1, 1, 32, 32)
+    traced = torch.jit.trace(quantized_model, example_input)
+    int8_path = os.path.join(args.output_dir, "vgg11_mnist_int8_traced.pt")
+    traced.save(int8_path)
 
     lut_path = os.path.join(args.output_dir, "hardware_relu_lut.csv")
     export_hardware_relu_lut(lut_path)

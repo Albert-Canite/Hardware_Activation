@@ -27,7 +27,7 @@ python train_vgg11_mnist_qat.py
 训练后产物：
 - `artifacts/vgg11_mnist_qat_best.pth`
 - `artifacts/vgg11_mnist_qat_final.pth`
-- `artifacts/vgg11_mnist_int8_scripted.pt`
+- `artifacts/vgg11_mnist_int8_traced.pt`
 - `artifacts/hardware_relu_lut.csv`
 
 ## 典型样本推理 + 激活前后 CSV 导出
