@@ -56,20 +56,40 @@ class Uniform8BitQuantizer(nn.Module):
 
 class HardwareLUTReLUSim(nn.Module):
     """
-    Hardware activation simulation:
-    - input quantized to [-1, 1] with 8-bit (256 points)
-    - ReLU
-    - output quantized to [0, 1] with 8-bit (256 points)
+    Trainable hardware-LUT simulation.
+
+    Forward path:
+      1) Normalize pre-activation by learnable input_scale -> domain around [-1,1]
+      2) Quantize to 8-bit in [-1,1]
+      3) ReLU
+      4) Quantize to 8-bit in [0,1]
+      5) Re-scale by learnable output_scale for downstream layers
+
+    This keeps the LUT I/O contract while preventing global signal collapse.
     """
 
-    def __init__(self):
+    def __init__(self, init_input_scale: float = 3.0, init_output_scale: float = 3.0):
         super().__init__()
         self.input_quant = Uniform8BitQuantizer(-1.0, 1.0, 256)
         self.relu = nn.ReLU(inplace=False)
         self.output_quant = Uniform8BitQuantizer(0.0, 1.0, 256)
 
+        # Positive trainable scales (softplus to keep > 0)
+        self.input_scale_raw = nn.Parameter(torch.tensor(float(init_input_scale)).log())
+        self.output_scale_raw = nn.Parameter(torch.tensor(float(init_output_scale)).log())
+
+    def _positive(self, raw: torch.Tensor) -> torch.Tensor:
+        return torch.nn.functional.softplus(raw) + 1e-6
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.output_quant(self.relu(self.input_quant(x)))
+        in_scale = self._positive(self.input_scale_raw)
+        out_scale = self._positive(self.output_scale_raw)
+
+        x_norm = x / in_scale
+        xq = self.input_quant(x_norm)
+        y = self.relu(xq)
+        yq = self.output_quant(y)
+        return yq * out_scale
 
 
 class QuantizableVGG11MNIST(nn.Module):
@@ -77,12 +97,10 @@ class QuantizableVGG11MNIST(nn.Module):
         super().__init__()
         base_model = models.vgg11(weights=None)
 
-        # standard vgg11 adapted for MNIST
         base_model.features[0] = nn.Conv2d(1, 64, kernel_size=3, stride=1, padding=1)
         base_model.avgpool = nn.AdaptiveAvgPool2d((7, 7))
         base_model.classifier[6] = nn.Linear(4096, 10)
 
-        # replace every ReLU with hardware-like simulated activation
         base_model.features = self._replace_relu(base_model.features)
         base_model.classifier = self._replace_relu(base_model.classifier)
 
@@ -130,13 +148,12 @@ class EpochStats:
 
 def train_one_epoch(model, loader, optimizer, criterion, device, max_batches=None):
     model.train()
-    running_loss = 0.0
-    correct = 0
-    total = 0
+    running_loss, correct, total = 0.0, 0, 0
 
     for batch_idx, (inputs, targets) in enumerate(loader):
         if max_batches is not None and batch_idx >= max_batches:
             break
+
         inputs = inputs.to(device)
         targets = targets.to(device)
 
@@ -156,19 +173,18 @@ def train_one_epoch(model, loader, optimizer, criterion, device, max_batches=Non
 
 def evaluate(model, loader, criterion, device, max_batches=None):
     model.eval()
-    running_loss = 0.0
-    correct = 0
-    total = 0
+    running_loss, correct, total = 0.0, 0, 0
 
     with torch.no_grad():
         for batch_idx, (inputs, targets) in enumerate(loader):
             if max_batches is not None and batch_idx >= max_batches:
                 break
+
             inputs = inputs.to(device)
             targets = targets.to(device)
-
             outputs = model(inputs)
             loss = criterion(outputs, targets)
+
             running_loss += loss.item() * targets.size(0)
             _, predicted = outputs.max(1)
             total += targets.size(0)
@@ -181,9 +197,9 @@ def main():
     parser = argparse.ArgumentParser(description="Train VGG-11 on MNIST with hardware-like 8-bit ReLU and QAT")
     parser.add_argument("--data-dir", type=str, default="./data")
     parser.add_argument("--output-dir", type=str, default="./artifacts")
-    parser.add_argument("--epochs", type=int, default=20)
+    parser.add_argument("--epochs", type=int, default=25)
     parser.add_argument("--batch-size", type=int, default=128)
-    parser.add_argument("--lr", type=float, default=1e-3)
+    parser.add_argument("--lr", type=float, default=3e-4)
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--num-workers", type=int, default=0)
     parser.add_argument("--limit-train-batches", type=int, default=None)
@@ -206,6 +222,7 @@ def main():
     test_loader = DataLoader(test_set, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers, pin_memory=torch.cuda.is_available())
 
     model = QuantizableVGG11MNIST().to(device)
+
     model.qconfig = QConfig(
         activation=FakeQuantize.with_args(
             observer=MovingAverageMinMaxObserver,
@@ -230,9 +247,11 @@ def main():
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max(args.epochs, 1))
 
     os.makedirs(args.output_dir, exist_ok=True)
-
     best_acc = 0.0
+
     print(f"Using device: {device}")
+    print("Hardware ReLU simulation: input [-1,1] 8-bit -> ReLU -> output [0,1] 8-bit + trainable scale recovery")
+
     for epoch in range(1, args.epochs + 1):
         train_stats = train_one_epoch(model, train_loader, optimizer, criterion, device, args.limit_train_batches)
         val_stats = evaluate(model, test_loader, criterion, device, args.limit_val_batches)
