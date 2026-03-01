@@ -17,8 +17,6 @@ from torchvision import datasets, models, transforms
 
 
 class RoundSTE(torch.autograd.Function):
-    """Round with straight-through estimator so quantization is trainable."""
-
     @staticmethod
     def forward(ctx, x: torch.Tensor) -> torch.Tensor:
         return torch.round(x)
@@ -28,49 +26,50 @@ class RoundSTE(torch.autograd.Function):
         return grad_output
 
 
+class ClampSTE(torch.autograd.Function):
+    @staticmethod
+    def forward(ctx, x: torch.Tensor, qmin: float, qmax: float) -> torch.Tensor:
+        return torch.clamp(x, qmin, qmax)
+
+    @staticmethod
+    def backward(ctx, grad_output: torch.Tensor):
+        return grad_output, None, None
+
+
 def scale_to_signed_unit(x: torch.Tensor) -> torch.Tensor:
-    """Scale [0, 1] tensor values to [-1, 1]. Top-level function keeps DataLoader picklable on Windows."""
     return x * 2.0 - 1.0
 
 
 class Uniform8BitQuantizer(nn.Module):
-    """
-    Uniform 8-bit quantizer constrained to [-1, 1], with STE gradient.
-    This preserves discrete forward values while keeping optimization possible.
-    """
-
-    def __init__(self, qmin: float = -1.0, qmax: float = 1.0, levels: int = 256):
+    def __init__(self, qmin: float, qmax: float, levels: int = 256):
         super().__init__()
         self.qmin = qmin
         self.qmax = qmax
-        self.levels = levels
         self.step = (qmax - qmin) / (levels - 1)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = torch.clamp(x, self.qmin, self.qmax)
-        scaled = (x - self.qmin) / self.step
-        q = RoundSTE.apply(scaled)
-        return q * self.step + self.qmin
+        x = ClampSTE.apply(x, self.qmin, self.qmax)
+        x = (x - self.qmin) / self.step
+        x = RoundSTE.apply(x)
+        return x * self.step + self.qmin
 
 
-class QuantizedReLU(nn.Module):
+class HardwareLUTReLUSim(nn.Module):
     """
-    ReLU with explicit 8-bit in/out mapping in [-1, 1].
-    - Input to ReLU is quantized to 8-bit values in [-1, 1]
-    - Output of ReLU is quantized again to 8-bit values in [-1, 1]
+    Hardware activation simulation:
+    - input quantized to [-1, 1] with 8-bit (256 points)
+    - ReLU
+    - output quantized to [0, 1] with 8-bit (256 points)
     """
 
     def __init__(self):
         super().__init__()
         self.input_quant = Uniform8BitQuantizer(-1.0, 1.0, 256)
         self.relu = nn.ReLU(inplace=False)
-        self.output_quant = Uniform8BitQuantizer(-1.0, 1.0, 256)
+        self.output_quant = Uniform8BitQuantizer(0.0, 1.0, 256)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        x = self.input_quant(x)
-        x = self.relu(x)
-        x = self.output_quant(x)
-        return x
+        return self.output_quant(self.relu(self.input_quant(x)))
 
 
 class QuantizableVGG11MNIST(nn.Module):
@@ -78,12 +77,12 @@ class QuantizableVGG11MNIST(nn.Module):
         super().__init__()
         base_model = models.vgg11(weights=None)
 
-        # Adapt standard VGG-11 for MNIST (resized to 1x32x32) and 10 output classes.
+        # standard vgg11 adapted for MNIST
         base_model.features[0] = nn.Conv2d(1, 64, kernel_size=3, stride=1, padding=1)
         base_model.avgpool = nn.AdaptiveAvgPool2d((7, 7))
         base_model.classifier[6] = nn.Linear(4096, 10)
 
-        # Replace every ReLU by quantized-ReLU module.
+        # replace every ReLU with hardware-like simulated activation
         base_model.features = self._replace_relu(base_model.features)
         base_model.classifier = self._replace_relu(base_model.classifier)
 
@@ -95,7 +94,7 @@ class QuantizableVGG11MNIST(nn.Module):
     def _replace_relu(module: nn.Module) -> nn.Module:
         for name, child in module.named_children():
             if isinstance(child, nn.ReLU):
-                setattr(module, name, QuantizedReLU())
+                setattr(module, name, HardwareLUTReLUSim())
             else:
                 QuantizableVGG11MNIST._replace_relu(child)
         return module
@@ -105,6 +104,22 @@ class QuantizableVGG11MNIST(nn.Module):
         x = self.vgg(x)
         x = self.dequant(x)
         return x
+
+
+def export_hardware_relu_lut(output_path: str):
+    os.makedirs(os.path.dirname(output_path), exist_ok=True)
+    quant_in = Uniform8BitQuantizer(-1.0, 1.0, 256)
+    quant_out = Uniform8BitQuantizer(0.0, 1.0, 256)
+
+    xs = torch.linspace(-1.0, 1.0, steps=256)
+    with torch.no_grad():
+        xq = quant_in(xs)
+        yq = quant_out(torch.relu(xq))
+
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write("index,input,output\n")
+        for idx, (xv, yv) in enumerate(zip(xq.tolist(), yq.tolist())):
+            f.write(f"{idx},{xv:.8f},{yv:.8f}\n")
 
 
 @dataclass
@@ -122,7 +137,6 @@ def train_one_epoch(model, loader, optimizer, criterion, device, max_batches=Non
     for batch_idx, (inputs, targets) in enumerate(loader):
         if max_batches is not None and batch_idx >= max_batches:
             break
-
         inputs = inputs.to(device)
         targets = targets.to(device)
 
@@ -150,13 +164,11 @@ def evaluate(model, loader, criterion, device, max_batches=None):
         for batch_idx, (inputs, targets) in enumerate(loader):
             if max_batches is not None and batch_idx >= max_batches:
                 break
-
             inputs = inputs.to(device)
             targets = targets.to(device)
 
             outputs = model(inputs)
             loss = criterion(outputs, targets)
-
             running_loss += loss.item() * targets.size(0)
             _, predicted = outputs.max(1)
             total += targets.size(0)
@@ -166,7 +178,7 @@ def evaluate(model, loader, criterion, device, max_batches=None):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Train VGG-11 on MNIST with 8-bit QAT and quantized ReLU mappings")
+    parser = argparse.ArgumentParser(description="Train VGG-11 on MNIST with hardware-like 8-bit ReLU and QAT")
     parser.add_argument("--data-dir", type=str, default="./data")
     parser.add_argument("--output-dir", type=str, default="./artifacts")
     parser.add_argument("--epochs", type=int, default=20)
@@ -184,30 +196,16 @@ def main():
     transform = transforms.Compose([
         transforms.Resize((32, 32)),
         transforms.ToTensor(),
-        transforms.Lambda(scale_to_signed_unit),  # map input to [-1, 1]
+        transforms.Lambda(scale_to_signed_unit),
     ])
 
     train_set = datasets.MNIST(root=args.data_dir, train=True, download=True, transform=transform)
     test_set = datasets.MNIST(root=args.data_dir, train=False, download=True, transform=transform)
 
-    train_loader = DataLoader(
-        train_set,
-        batch_size=args.batch_size,
-        shuffle=True,
-        num_workers=args.num_workers,
-        pin_memory=torch.cuda.is_available(),
-    )
-    test_loader = DataLoader(
-        test_set,
-        batch_size=args.batch_size,
-        shuffle=False,
-        num_workers=args.num_workers,
-        pin_memory=torch.cuda.is_available(),
-    )
+    train_loader = DataLoader(train_set, batch_size=args.batch_size, shuffle=True, num_workers=args.num_workers, pin_memory=torch.cuda.is_available())
+    test_loader = DataLoader(test_set, batch_size=args.batch_size, shuffle=False, num_workers=args.num_workers, pin_memory=torch.cuda.is_available())
 
     model = QuantizableVGG11MNIST().to(device)
-
-    # QAT setup: explicit 8-bit ranges via quant_min/quant_max to avoid reduce_range warnings.
     model.qconfig = QConfig(
         activation=FakeQuantize.with_args(
             observer=MovingAverageMinMaxObserver,
@@ -228,33 +226,16 @@ def main():
     prepare_qat(model, inplace=True)
 
     criterion = nn.CrossEntropyLoss()
-    optimizer = optim.Adam(model.parameters(), lr=args.lr)
+    optimizer = optim.Adam(model.parameters(), lr=args.lr, weight_decay=1e-5)
     scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max(args.epochs, 1))
 
     os.makedirs(args.output_dir, exist_ok=True)
 
     best_acc = 0.0
     print(f"Using device: {device}")
-    if args.epochs < 10:
-        print("Warning: epochs < 10 is usually too low for VGG11+MNIST QAT and may underfit.")
-
     for epoch in range(1, args.epochs + 1):
-        train_stats = train_one_epoch(
-            model,
-            train_loader,
-            optimizer,
-            criterion,
-            device,
-            max_batches=args.limit_train_batches,
-        )
-        val_stats = evaluate(
-            model,
-            test_loader,
-            criterion,
-            device,
-            max_batches=args.limit_val_batches,
-        )
-
+        train_stats = train_one_epoch(model, train_loader, optimizer, criterion, device, args.limit_train_batches)
+        val_stats = evaluate(model, test_loader, criterion, device, args.limit_val_batches)
         scheduler.step()
 
         print(
@@ -267,21 +248,23 @@ def main():
             best_acc = val_stats.accuracy
             torch.save(model.state_dict(), os.path.join(args.output_dir, "vgg11_mnist_qat_best.pth"))
 
-    # Save trained QAT model (fake-quantized model).
     qat_path = os.path.join(args.output_dir, "vgg11_mnist_qat_final.pth")
     torch.save(model.state_dict(), qat_path)
 
-    # Convert to true int8 quantized model and save as TorchScript.
     model_cpu = copy.deepcopy(model).to("cpu").eval()
     quantized_model = convert(model_cpu, inplace=False)
     scripted = torch.jit.script(quantized_model)
     int8_path = os.path.join(args.output_dir, "vgg11_mnist_int8_scripted.pt")
     scripted.save(int8_path)
 
+    lut_path = os.path.join(args.output_dir, "hardware_relu_lut.csv")
+    export_hardware_relu_lut(lut_path)
+
     print("Training complete.")
     print(f"Best Val Acc: {best_acc:.2f}%")
     print(f"Saved QAT model: {qat_path}")
     print(f"Saved INT8 model: {int8_path}")
+    print(f"Saved hardware LUT: {lut_path}")
 
 
 if __name__ == "__main__":
