@@ -2,38 +2,49 @@
 
 一个脚本，IDE 里直接 Run 即可完成：训练 + 验证 + 导出模型 + 导出硬件 LUT。
 
-- `train_vgg11_mnist_qat.py`
+- 训练脚本：`train_vgg11_mnist_qat.py`
+- 推理与激活导出脚本：`run_inference_and_dump_activation.py`
 
-## 为什么之前会一直 10% 左右
+## 默认训练配置（按你要求）
 
-之前实现中两件事叠加导致训练塌缩：
+- 总 epoch：`10`
+- QAT fake quant 开始：`第 4 个 epoch`（`--qat-start-epoch 4`）
+- 其余默认：`lr=3e-4`、`num-workers=0`
 
-1. 每层激活都强约束到硬件域，如果输入分布不匹配，很多层会饱和，梯度信息很差。
-2. 从第 1 个 epoch 就开启全量 QAT fake-quant，优化会更难。
+## 核心约束
 
-本版修复：
-- 激活改为**自适应归一化 + 硬件量化**：先把每层输入按运行统计缩放到接近 `[-1,1]`，再做 8-bit LUT 约束，最后再缩放回网络尺度。
-- 增加 `--qat-start-epoch`（默认 6）：前几轮先学到可用特征，再进入 QAT。
-- 使用 `vgg11_bn`（仍是 VGG11 主干）提升稳定性。
+- 每一层激活都模拟硬件 ReLU：
+  - 输入量化：`[-1,1]`，8-bit（256点）
+  - 通过 ReLU
+  - 输出量化：`[0,1]`，8-bit（256点）
 
-## 满足的核心需求
-
-- 每一层激活都模拟硬件 ReLU：输入 `[-1,1]` 8-bit -> ReLU -> 输出 `[0,1]` 8-bit。
-- 训练流程仍是一键运行，默认参数可直接跑。
-- 训练完成导出：
-  - `artifacts/vgg11_mnist_qat_best.pth`
-  - `artifacts/vgg11_mnist_qat_final.pth`
-  - `artifacts/vgg11_mnist_int8_scripted.pt`
-  - `artifacts/hardware_relu_lut.csv`
-
-## 直接运行
+## 直接训练
 
 ```bash
 python train_vgg11_mnist_qat.py
 ```
 
-默认值：
-- `epochs=25`
-- `lr=3e-4`
-- `qat-start-epoch=6`
-- `num-workers=0`
+训练后产物：
+- `artifacts/vgg11_mnist_qat_best.pth`
+- `artifacts/vgg11_mnist_qat_final.pth`
+- `artifacts/vgg11_mnist_int8_scripted.pt`
+- `artifacts/hardware_relu_lut.csv`
+
+## 典型样本推理 + 激活前后 CSV 导出
+
+```bash
+python run_inference_and_dump_activation.py
+```
+
+默认会：
+- 加载 `artifacts/vgg11_mnist_qat_best.pth`
+- 对测试集第 0 个样本做推理并打印预测结果
+- 导出 `artifacts/inference_activation_pre_post.csv`
+
+CSV 两列：
+1. `pre_activation`：进入激活函数前的数据
+2. `post_activation`：通过硬件激活仿真后的输出
+
+你可以直接检查：
+- `post_activation` 值域是否在 `[0,1]`
+- `post_activation` 的离散点数是否不超过 256（8bit）
