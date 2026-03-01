@@ -16,13 +16,28 @@ from torch.utils.data import DataLoader
 from torchvision import datasets, models, transforms
 
 
+class RoundSTE(torch.autograd.Function):
+    """Round with straight-through estimator so quantization is trainable."""
+
+    @staticmethod
+    def forward(ctx, x: torch.Tensor) -> torch.Tensor:
+        return torch.round(x)
+
+    @staticmethod
+    def backward(ctx, grad_output: torch.Tensor) -> torch.Tensor:
+        return grad_output
+
+
 def scale_to_signed_unit(x: torch.Tensor) -> torch.Tensor:
     """Scale [0, 1] tensor values to [-1, 1]. Top-level function keeps DataLoader picklable on Windows."""
     return x * 2.0 - 1.0
 
 
 class Uniform8BitQuantizer(nn.Module):
-    """Uniform 8-bit quantizer constrained to [-1, 1]."""
+    """
+    Uniform 8-bit quantizer constrained to [-1, 1], with STE gradient.
+    This preserves discrete forward values while keeping optimization possible.
+    """
 
     def __init__(self, qmin: float = -1.0, qmax: float = 1.0, levels: int = 256):
         super().__init__()
@@ -33,8 +48,9 @@ class Uniform8BitQuantizer(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         x = torch.clamp(x, self.qmin, self.qmax)
-        x = torch.round((x - self.qmin) / self.step) * self.step + self.qmin
-        return x
+        scaled = (x - self.qmin) / self.step
+        q = RoundSTE.apply(scaled)
+        return q * self.step + self.qmin
 
 
 class QuantizedReLU(nn.Module):
@@ -62,7 +78,7 @@ class QuantizableVGG11MNIST(nn.Module):
         super().__init__()
         base_model = models.vgg11(weights=None)
 
-        # Adapt VGG-11 for MNIST (resized to 1x32x32) and 10 output classes.
+        # Adapt standard VGG-11 for MNIST (resized to 1x32x32) and 10 output classes.
         base_model.features[0] = nn.Conv2d(1, 64, kernel_size=3, stride=1, padding=1)
         base_model.avgpool = nn.AdaptiveAvgPool2d((7, 7))
         base_model.classifier[6] = nn.Linear(4096, 10)
@@ -153,7 +169,7 @@ def main():
     parser = argparse.ArgumentParser(description="Train VGG-11 on MNIST with 8-bit QAT and quantized ReLU mappings")
     parser.add_argument("--data-dir", type=str, default="./data")
     parser.add_argument("--output-dir", type=str, default="./artifacts")
-    parser.add_argument("--epochs", type=int, default=3)
+    parser.add_argument("--epochs", type=int, default=20)
     parser.add_argument("--batch-size", type=int, default=128)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--seed", type=int, default=42)
@@ -213,11 +229,14 @@ def main():
 
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.Adam(model.parameters(), lr=args.lr)
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=max(args.epochs, 1))
 
     os.makedirs(args.output_dir, exist_ok=True)
 
     best_acc = 0.0
     print(f"Using device: {device}")
+    if args.epochs < 10:
+        print("Warning: epochs < 10 is usually too low for VGG11+MNIST QAT and may underfit.")
 
     for epoch in range(1, args.epochs + 1):
         train_stats = train_one_epoch(
@@ -235,6 +254,8 @@ def main():
             device,
             max_batches=args.limit_val_batches,
         )
+
+        scheduler.step()
 
         print(
             f"Epoch {epoch}/{args.epochs} | "
@@ -258,6 +279,7 @@ def main():
     scripted.save(int8_path)
 
     print("Training complete.")
+    print(f"Best Val Acc: {best_acc:.2f}%")
     print(f"Saved QAT model: {qat_path}")
     print(f"Saved INT8 model: {int8_path}")
 
