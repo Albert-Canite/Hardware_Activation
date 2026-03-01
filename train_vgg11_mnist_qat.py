@@ -62,7 +62,7 @@ class QuantizableVGG11MNIST(nn.Module):
         super().__init__()
         base_model = models.vgg11(weights=None)
 
-        # Adapt VGG-11 for MNIST (1x28x28) and 10 output classes.
+        # Adapt VGG-11 for MNIST (resized to 1x32x32) and 10 output classes.
         base_model.features[0] = nn.Conv2d(1, 64, kernel_size=3, stride=1, padding=1)
         base_model.avgpool = nn.AdaptiveAvgPool2d((7, 7))
         base_model.classifier[6] = nn.Linear(4096, 10)
@@ -166,6 +166,7 @@ def main():
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     transform = transforms.Compose([
+        transforms.Resize((32, 32)),
         transforms.ToTensor(),
         transforms.Lambda(scale_to_signed_unit),  # map input to [-1, 1]
     ])

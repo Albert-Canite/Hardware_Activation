@@ -6,7 +6,7 @@
 
 ## 功能说明
 
-- 使用标准 VGG-11 结构（基于 `torchvision.models.vgg11`）并适配 MNIST（1 通道、10 类）。
+- 使用标准 VGG-11 结构（基于 `torchvision.models.vgg11`）并适配 MNIST（1 通道、10 类），并将输入 resize 到 32×32 以匹配 VGG-11 的 5 次池化。
 - 所有激活函数均为 ReLU（通过 `QuantizedReLU` 封装）。
 - 每次进入激活函数前后都进行 `[-1, 1]` 范围的 8-bit（256级）离散映射，保证激活输入/输出不是连续值。
 - 同时启用 PyTorch QAT（Quantization Aware Training）进行 8-bit 量化训练（权重/激活 fake quant）。
