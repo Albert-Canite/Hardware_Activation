@@ -1,0 +1,14 @@
+2,hardware_lut_relu_csv,./artifacts/2bit/vgg11_mnist_qat_best_2bit.pth,./LUT_ReLU.csv,4,9.7900
+2,ideal_trained_qat_model,./artifacts/2bit/vgg11_mnist_qat_best_2bit.pth,checkpoint_internal_activation,4,11.3500
+8,hardware_lut_relu_csv,./artifacts/8bit/vgg11_mnist_qat_best_8bit.pth,./LUT_ReLU.csv,256,98.6400
+8,ideal_trained_qat_model,./artifacts/8bit/vgg11_mnist_qat_best_8bit.pth,checkpoint_internal_activation,256,99.5100
+3,hardware_lut_relu_csv,./artifacts/3bit/vgg11_mnist_qat_best_3bit.pth,./LUT_ReLU.csv,8,13.8200
+3,ideal_trained_qat_model,./artifacts/3bit/vgg11_mnist_qat_best_3bit.pth,checkpoint_internal_activation,8,11.0900
+4,hardware_lut_relu_csv,./artifacts/4bit/vgg11_mnist_qat_best_4bit.pth,./LUT_ReLU.csv,16,96.7800
+4,ideal_trained_qat_model,./artifacts/4bit/vgg11_mnist_qat_best_4bit.pth,checkpoint_internal_activation,16,99.2300
+5,hardware_lut_relu_csv,./artifacts/5bit/vgg11_mnist_qat_best_5bit.pth,./LUT_ReLU.csv,32,98.9700
+5,ideal_trained_qat_model,./artifacts/5bit/vgg11_mnist_qat_best_5bit.pth,checkpoint_internal_activation,32,99.2700
+6,hardware_lut_relu_csv,./artifacts/6bit/vgg11_mnist_qat_best_6bit.pth,./LUT_ReLU.csv,64,98.5500
+6,ideal_trained_qat_model,./artifacts/6bit/vgg11_mnist_qat_best_6bit.pth,checkpoint_internal_activation,64,99.3800
+7,hardware_lut_relu_csv,./artifacts/7bit/vgg11_mnist_qat_best_7bit.pth,./LUT_ReLU.csv,128,98.9900
+7,ideal_trained_qat_model,./artifacts/7bit/vgg11_mnist_qat_best_7bit.pth,checkpoint_internal_activation,128,99.5300

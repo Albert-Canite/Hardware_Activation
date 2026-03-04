@@ -1,0 +1,3 @@
+bit,method,model_path,lut_source,lut_points,test_acc_percent
+3,hardware_lut_relu_csv,./artifacts/3bit/vgg11_mnist_qat_best_3bit.pth,./LUT_ReLU.csv,8,13.8200
+3,ideal_trained_qat_model,./artifacts/3bit/vgg11_mnist_qat_best_3bit.pth,checkpoint_internal_activation,8,11.0900

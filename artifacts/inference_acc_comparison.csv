@@ -1,0 +1,3 @@
+method,model_path,lut_source,lut_points,test_acc_percent
+hardware_relu_lut_csv,./artifacts/vgg11_mnist_qat_best.pth,./artifacts/hardware_relu_lut.csv,256,99.5900
+ideal_relu_lut_csv,./artifacts/vgg11_mnist_qat_best.pth,./LUT_ReLU.csv,17,98.7300

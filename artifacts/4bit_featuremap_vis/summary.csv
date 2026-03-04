@@ -1,0 +1,2 @@
+model_path,hardware_lut_csv,activation_bits,sample_idx,true_label,pred_ideal,pred_hardware
+./artifacts/4bit/vgg11_mnist_qat_best_4bit.pth,./LUT_ReLU.csv,4,61,8,8,8
