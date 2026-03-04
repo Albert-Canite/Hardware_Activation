@@ -1,7 +1,7 @@
 # Hardware Activation Validation Pipeline (KAUST IPL Related)
 
 This repository is related to KAUST IPL's paper:
-**"Van der Waals Hybrid Platform for Reconfiguration All-Optical Neural Network"**.
+**"Transfer-free Van der Waals Integration for Reconfigurable Optical Neural Networks"**.
 
 The goal is to evaluate whether a measured hardware LUT activation can replace the ideal quantized ReLU path in a QAT-trained VGG11-MNIST model, and to quantify the accuracy/feature-map differences across bit-widths.
 
